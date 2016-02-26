@@ -2,6 +2,7 @@ import flask
 from flask import render_template
 from flask import request
 from flask import url_for
+from flask import jsonify
 import uuid
 
 import json
@@ -51,12 +52,13 @@ def choose():
     ## to pull it back here because the redirect has to be a
     ## 'return'
     
+    global gcal_service
     app.logger.debug("Checking credentials for Google calendar access")
     credentials = valid_credentials()
     if not credentials:
       app.logger.debug("Redirecting to authorization")
       return flask.redirect(flask.url_for('oauth2callback'))
-	global gcal_service
+
     gcal_service = get_gcal_service(credentials)
     app.logger.debug("Returned from get_gcal_service")
     flask.session['calendars'] = list_calendars(gcal_service)
@@ -184,16 +186,18 @@ def setrange():
     User chose a date range with the bootstrap daterange
     widget.
     """
-    app.logger.debug("Entering setrange")  
-    flask.flash("Setrange gave us '{}'".format(
+    app.logger.debug("Entering setrange")
+    flask.flash("Setrange gave us '{}' for the date".format(
       request.form.get('daterange')))
     daterange = request.form.get('daterange')
     flask.session['daterange'] = daterange
     daterange_parts = daterange.split()
     flask.session['begin_date'] = interpret_date(daterange_parts[0])
     flask.session['end_date'] = interpret_date(daterange_parts[2])
-    flask.session['begin_time'] = request.form.get('begin_time')
-    flask.session['end_time'] = request.form.get('end_time')
+    flask.flash("Setrange gave us '{}' and '{}' as beginning and ending times, respectively".format(
+        request.form.get('begin_time'), request.form.get('end_time')))
+    flask.session['begin_time'] = interpret_time(request.form.get('begin_time'))
+    flask.session['end_time'] = interpret_time(request.form.get('end_time'))
     app.logger.debug("Setrange parsed {} - {}  dates as {} - {} times as {} - {}".format( daterange_parts[0], daterange_parts[1],
                 flask.session['begin_date'], flask.session['end_date'],
                 flask.session['begin_time'], flask.session['end_time']))
@@ -212,6 +216,7 @@ def fetchcal():
         if cal['id'] in selected:
             cals.append(cal)
     app.logger.debug(cals)
+    find_busy(cals)
     return flask.redirect("/index")
 
 ####
@@ -338,9 +343,11 @@ def find_busy(cal_list):
     """
     A function that goes through a list of calendars and pulls all busy times from them.
     """
-    busy = []
+    busy_times = []
     begin = flask.session['begin_date']
     end = flask.session['end_date']
+    begin_time = flask.session['begin_time']
+    end_time = flask.session['end_time']
     
     #To split into days
     end = next_day(end)
@@ -354,36 +361,46 @@ def find_busy(cal_list):
         _id = cal['id']
         
         #The query for each of the calenders selected
-        freebusy_query = {"timeMin": begin
-                            "timeMax": end
+        freebusy_query = {"timeMin": begin,
+                            "timeMax": end,
                             "items": [{"id": _id}]}
     
         result = gcal_service.freebusy().query(body=freebusy_query).execute()
+        app.logger.debug(result)
 
         #Gets the busy times from the result and adds them to an overall list
-        busy_time = result['calendars']['id']['busy']
-        busy.append(busy_time)
+        busy_time = result['calendars'][_id]['busy']
+        busy_times.append(busy_time)
     
-    return busy
+    #Finds the overlap between each busy time and time range
+    ev_list = busy_times[0]
+    ret_busy = []
+    
+    for times in ev_list:
+        app.logger.debug(times)
+        busy_start = times['start']
+        busy_end = times['end']
+        
+        if (busy_start < begin_time and busy_end <= begin_time):
+            ret_busy.append({'start': busy_start, 'end': busy_end})
+            
+        elif (end_time <= busy_start and end_time < busy_end):
+            ret_busy.append({'start': busy_start, 'end': busy_end})
+            
+        else:
+            break
 
-def find_overlap(start, end, ev_start, ev_end):
-    """
-    A boolean function that determines if there is any overlap.
-    """
-    #If the event is outside the start and end times
-    if (ev_start < start and end < ev_end):
-        return True
-
-    #If the event starts but does not end within the start and end times
-    elif (start <= ev_start and end < ev_end):
-        return True
-
-    #If the event ends but does not start within the start and end times
-    elif (ev_start < start and ev_end <= end):
-        return True
-
-    #No overlap
-    return False
+    #Prints busy times
+    app.logger.debug(ret_busy)
+    if ret_busy != []:
+        for busy_time in ret_busy:
+            b_start = arrow.get(busy_time['start']).to('local').format("MM/DD/YYYY HH:mm A")
+            b_end = arrow.get(busy_time['end']).to('local').format("HH:mm A")
+            
+            message = "From {} to {}".format(b_start,b_end)
+            flask.flash(message)
+    else:
+        flask.flash("No busy times found")
 
 #################
 #

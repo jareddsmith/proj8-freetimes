@@ -53,13 +53,13 @@
 <hr>
 <h2>Date range</h2>
   <form action="/setrange" method="post">
-  <input type="text" name="daterange" size="12"
+  <input type="text" name="daterange" placeholder="MM/DD/YYYY - MM/DD/YYYY" size="12"
     {% if session.daterange is defined %}
          value="{{session.daterange}}"
     {% endif %}
      class="pull-down"
      style="background: #fff; cursor: pointer; padding: 5px 10px;
-     border: 1px solid #ccc; width: 13em" >
+     border: 1px solid #ccc; width: 16em" >
   <script type="text/javascript">
   $(function() {
   $('input[name="daterange"]').daterangepicker(
@@ -76,14 +76,17 @@
        );
     });
   </script>
-  
+<p>
 <h2>Time Range</h2>
+in AM/PM or 24 hour format
+</p>
+<br>
 <label>Begin time:
-<input type=text name="begin_time" placeholder="HH:mm">
+<input type=text name="begin_time" placeholder="HH:mm (am/pm)">
 </label>
 
 <label>End time:
-<input type=text name="end_time" placeholder="HH:mm">
+<input type=text name="end_time" placeholder="HH:mm (am/pm)">
 </label>
 
 <br><br><input type="submit" value="Set ranges" />
@@ -118,8 +121,6 @@
         </div>
     </div>
 </form>
-<hr>
-<h3>Busy Times</h3>
 </div>  <!-- container (for bootstrap) -->
 </body>
 </html>

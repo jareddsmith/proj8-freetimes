@@ -216,7 +216,7 @@ def fetchcal():
         if cal['id'] in selected:
             cals.append(cal)
     app.logger.debug(cals)
-    find_busy(cals)
+    find_busy_free(cals)
     return flask.redirect("/index")
 
 ####
@@ -339,7 +339,7 @@ def cal_sort_key( cal ):
        primary_key = "X"
     return (primary_key, selected_key, cal["summary"])
 
-def find_busy(cal_list):
+def find_busy_free(cal_list):
     """
     A function that goes through a list of calendars and pulls all busy times from them.
     """
@@ -371,9 +371,11 @@ def find_busy(cal_list):
         #Gets the busy times from the result and adds them to an overall list
         busy_time = result['calendars'][_id]['busy']
         busy_times.append(busy_time)
-    
+
+
     #Finds the overlap between each busy time and time range
-    ev_list = busy_times[0]
+    ev_list = sort_times(busy_times[0])
+    #ev_list = consolidate_busy(ev_list)
     ret_busy = []
     
     for times in ev_list:
@@ -393,14 +395,90 @@ def find_busy(cal_list):
     #Prints busy times
     app.logger.debug(ret_busy)
     if ret_busy != []:
+        flask.flash("These busy times were found:")
         for busy_time in ret_busy:
             b_start = arrow.get(busy_time['start']).to('local').format("MM/DD/YYYY HH:mm A")
             b_end = arrow.get(busy_time['end']).to('local').format("HH:mm A")
             
-            message = "From {} to {}".format(b_start,b_end)
+            message = "Busy from {} to {}".format(b_start,b_end)
             flask.flash(message)
     else:
         flask.flash("No busy times found")
+
+    ret_free = free_time(ret_busy)
+    app.logger.debug(ret_free)
+    if ret_free != []:
+        flask.flash("These free times were found:")
+        for fr_time in ret_free:
+            f_start = arrow.get(fr_time['start']).to('local').format("MM/DD/YYYY HH:mm A")
+            f_end = arrow.get(fr_time['end']).to('local').format("HH:mm A")
+            
+            message = "Free from {} to {}".format(f_start,f_end)
+            flask.flash(message)
+    else:
+        flask.flash("No free times found")
+
+
+def sort_times(ev_list):
+    """
+    Sorts a list of event by the start times across multiple calenders for ease of display and operation
+    """
+    start_times = []
+    for ev in ev_list:
+        start_times.append(ev['start'])
+    start_times.sort()
+
+    sorted = []
+    for st_time in start_times:
+        for ev in ev_list:
+            ev_start = ev['start']
+            ev_end = ev['end']
+            if st_time == ev_start:
+                sorted.append({'start': ev_start, 'end':ev_end})
+
+    return sorted
+
+def free_time(busy_list):
+    """
+    Finds the free times from a list of busy
+    """
+
+    free_times = []
+    for i in range(len(busy_list)-1):
+        ev = busy_list[i]
+        next = busy_list[i+1]
+
+        #Determines if there is a space between the event's end and the next's start
+        if ev['end'] < next['start']:
+            free_times.append({'start': ev['end'], 'end':next['start']})
+
+    return free_times
+
+def consolidate_busy(busy_list):
+    """
+    Consolidates the busy times of multiple calenders so there is no overlap in busy events
+    """
+    consolidated = []
+    for i in range(len(busy_list)-1):
+        ev = busy_list[i]
+        next = busy_list[i+1]
+        
+        #If the next busy event starts before the current event ends and ends before the current event does.
+        if (ev['end'] > next['start'] and ev['end'] > next['end']):
+            consolidated.append({'start': ev['start'], 'end': ev['end']})
+            busy_list[i+1]['end'] = ev['end']
+
+        #If the next busy event starts before the event ends
+        elif ev['end'] > next['start']:
+            consolidated.append({'start': ev['start'], 'end': next['start']})
+
+        else:
+            consolidated.append({'start': ev['start'], 'end': ev['end']})
+
+    #Adds the final event
+    consolidated.append(busy_list[len(busy_list)-1])
+
+    return consolidated
 
 #################
 #

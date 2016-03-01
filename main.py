@@ -198,6 +198,7 @@ def setrange():
         request.form.get('begin_time'), request.form.get('end_time')))
     flask.session['begin_time'] = interpret_time(request.form.get('begin_time'))
     flask.session['end_time'] = interpret_time(request.form.get('end_time'))
+    print(flask.session['end_time'].format("HH:mm"))
     app.logger.debug("Setrange parsed {} - {}  dates as {} - {} times as {} - {}".format( daterange_parts[0], daterange_parts[1],
                 flask.session['begin_date'], flask.session['end_date'],
                 flask.session['begin_time'], flask.session['end_time']))
@@ -357,6 +358,7 @@ def find_busy_free(cal_list):
     end = end.format('YYYY-MM-DD HH:mm:ss ZZ')
     
     #To go through each selected calendar and pull the busy times using freebusy
+    app.logger.debug(cal_list)
     for cal in cal_list:
         _id = cal['id']
         
@@ -366,20 +368,25 @@ def find_busy_free(cal_list):
                             "items": [{"id": _id}]}
     
         result = gcal_service.freebusy().query(body=freebusy_query).execute()
-        app.logger.debug(result)
 
         #Gets the busy times from the result and adds them to an overall list
         busy_time = result['calendars'][_id]['busy']
         busy_times.append(busy_time)
 
+    #Puts all events into the same list
+    ev_list = []
+    
+    for i in range(len(busy_times)):
+        ev_list.extend(busy_times[i])
+
+    ev_list = sort_times(ev_list)
+    ev_list = consolidate_events(ev_list)
+    app.logger.debug(ev_list)
+
+    ret_busy = []
 
     #Finds the overlap between each busy time and time range
-    ev_list = sort_times(busy_times[0])
-    #ev_list = consolidate_busy(ev_list)
-    ret_busy = []
-    
     for times in ev_list:
-        app.logger.debug(times)
         busy_start = times['start']
         busy_end = times['end']
         
@@ -405,6 +412,7 @@ def find_busy_free(cal_list):
     else:
         flask.flash("No busy times found")
 
+    flask.flash("")
     ret_free = free_time(ret_busy)
     app.logger.debug(ret_free)
     if ret_free != []:
@@ -444,29 +452,66 @@ def free_time(busy_list):
     """
 
     free_times = []
-    for i in range(len(busy_list)-1):
-        ev = busy_list[i]
-        next = busy_list[i+1]
-
-        #Determines if there is a space between the event's end and the next's start
-        if ev['end'] < next['start']:
-            free_times.append({'start': ev['end'], 'end':next['start']})
-
-    return free_times
-
-def consolidate_busy(busy_list):
-    """
-    Consolidates the busy times of multiple calenders so there is no overlap in busy events
-    """
-    consolidated = []
+    runover = []
+    
+    #Constructs the starting and ending points for each day
+    str_date = arrow.get(flask.session['begin_date'])
+    str_hour = arrow.get(flask.session['begin_time']).hour
+    str_min = arrow.get(flask.session['begin_time']).minute
+    start = str_date.replace(hour=str_hour, minute=str_min)
+    app.logger.debug(start)
+    
+    end_date = arrow.get(flask.session['end_date'])
+    end_hour = arrow.get(flask.session['end_time']).hour
+    end_min = arrow.get(flask.session['end_time']).minute
+    end = end_date.replace(hour=end_hour, minute=end_min)
+    app.logger.debug(end)
+    
+    #Tests to see if there is a free period before the first event, if so appends
+    first_ev = busy_list[0]
+    if arrow.get(first_ev['start']) > start:
+        free_times.append({'start': start, 'end': first_ev['start']})
+    
+    print("Starting for loop")
     for i in range(len(busy_list)-1):
         ev = busy_list[i]
         next = busy_list[i+1]
         
+        ev_end = arrow.get(ev['end'])
+        next_start = arrow.get(next['start'])
+        end_day = ev_end.day
+        st_day = next_start.day
+        #Determines if there is a space between the event's end and the next's start
+        if ev_end < next_start:
+            if ev_end.day == next_start.day:
+                free_times.append({'start': ev['end'], 'end':next['start']})
+            #Fixes the runover to fit in the legal time frame
+            else:
+                free_times.append({'start': ev_end, 'end': end.replace(day=end_day)})
+                if next_start > start.replace(day=st_day):
+                    free_times.append({'start': start.replace(day=st_day), 'end': next_start})
+    
+    #Finds the last free periods after the last event
+    last_ev = busy_list[len(busy_list)-1]
+    if arrow.get(last_ev['end']) < end:
+        free_times.append({'start': last_ev['end'], 'end': end})
+
+    app.logger.debug(free_times)
+    return free_times
+
+def consolidate_events(ev_list):
+    """
+    Consolidates the busy times of multiple calenders so there is no overlap in busy events
+    """
+    consolidated = []
+    for i in range(len(ev_list)-1):
+        ev = ev_list[i]
+        next = ev_list[i+1]
+        
         #If the next busy event starts before the current event ends and ends before the current event does.
         if (ev['end'] > next['start'] and ev['end'] > next['end']):
             consolidated.append({'start': ev['start'], 'end': ev['end']})
-            busy_list[i+1]['end'] = ev['end']
+            ev_list[i+1]['end'] = ev['end']
 
         #If the next busy event starts before the event ends
         elif ev['end'] > next['start']:
@@ -476,7 +521,7 @@ def consolidate_busy(busy_list):
             consolidated.append({'start': ev['start'], 'end': ev['end']})
 
     #Adds the final event
-    consolidated.append(busy_list[len(busy_list)-1])
+    consolidated.append(ev_list[len(ev_list)-1])
 
     return consolidated
 
